@@ -1,89 +1,291 @@
-# Nippet specification
+# agent-snippets specification
 
-Nippet is short for snippet. It is a CLI for turning instructions written in ordinary language into executable, testable actions.
+Agent-snippets compiles instructions into reusable workflows that create or
+transform files, folders, names, and text.
 
-An AI agent uses the CLI to translate a user's `nippet.md` into a workflow and its step definitions. The generated files can be inspected, tested, and reused.
+**Status:** design specification; implementation WIP. This replaces the Nippet
+design with the framework in the
+[agent-tests README](https://github.com/feuersteiner/agent-tests/blob/964076aed883c352036cc0677b5e94f26abc2304/README.md)
+and [library rules](https://github.com/feuersteiner/agent-tests/blob/964076aed883c352036cc0677b5e94f26abc2304/library/AGENTS.md).
+The source is pinned so future framework changes can be compared explicitly.
 
 ## Package boundaries
 
-- Nippet owns actions: creating or transforming files, folders, names, and text, and sequencing those operations.
-- Agent-tests owns checks: evaluating conventions and reporting whether a target satisfies them.
-- Neither CLI requires the other. Nippet still validates its inputs and tests its own actions; these are execution and development requirements, not a standalone repository-checking feature.
-
-Potential shared code includes model-provider adapters, schema-loading utilities, and error serialization. Extract a shared library only when both implementations demonstrate the same need. Shared infrastructure must not introduce a dependency between the CLIs. Its packaging remains undecided.
+Agent-snippets owns actions: generating content, rendering templates, creating
+files and folders, applying naming conventions, and sequencing transformations.
+Agent-tests owns checks: inspecting targets and reporting findings without
+modifying them. Neither CLI depends on the other. Input validation and evals
+belong to each tool; they do not change these boundaries.
 
 ## Package
 
 ```text
-create-component/
-  nippet.md
-  workflow.yaml
-  action-create-component.yaml
-  <test file>
-  templates/
-  fixtures/
+.agents/snippets/<id>/
+  SNIPPET.md
+  snippet.yaml
 ```
 
-- `nippet.md`: the user's description, in the user's own words, of what the action should do. Similar in purpose to `SKILL.md`.
-- `workflow.yaml`: the executable translation of that description. Sequences and combines the steps.
-- `action-<kebab-case-name>.yaml`: defines a step that performs an operation.
-- Test file: supplies test inputs and expected outcomes to validate the nippet, as a normal `.test.ts` file would. The exact format remains undecided.
-- Templates and fixtures: optional supporting files.
+`SNIPPET.md` describes the task, examples, exceptions, inputs, and intended
+outputs in ordinary prose. The agent generates `snippet.yaml`, which holds
+`id`, `title`, `description`, `source`, `triggers`, `actions`, and `evals`.
+Ids are lowercase kebab-case and match their directory. `source` is
+`sha256:<SHA-256 of the exact SNIPPET.md bytes>`.
 
-## Workflow
+One YAML file contains the entire executable workflow, including inline
+instructions, templates, and labeled examples. Separate `workflow.yaml`,
+`action-*.yaml`, scripts, and external test files are not part of this format.
+YAML remains editable by hand.
 
-The workflow describes what runs and in what order. Step implementation details belong in the separate step files.
+## Where it runs
 
-Illustrative syntax, pending schema design:
+- During an agent session, for a named generation or transformation task.
+- On selected files or a repository area, including uncommitted changes or a
+  change relative to a base branch.
+- In CI, when the workflow explicitly requests generated content.
+- Through a Vitest plugin, comparing generated outputs with expectations.
+- As a library from the `agent-snippets` npm package.
+
+Execution always names a snippet. `init` creates configuration and
+`.agents/snippets/`; it does not install an automatic generation hook.
+
+## Triggers and scope
+
+Triggers use the same semantics as agent-tests: each trigger reads an input's
+`path`, its `content`, or both. Every filter named in a trigger must pass, in
+the order written. A list of triggers holds alternatives and stops at the
+first passing trigger. Rejected inputs are skipped without running actions.
+
+- `path.match`: globs on the input path; a list matches any listed glob.
+- `path.ask`: a decision model judging the path.
+- `content.match`: a regex on the input text.
+- `content.ask`: a decision model judging the input text.
 
 ```yaml
-steps:
-  - action: create-component
+triggers:
+  - path:
+      match: ["content/**/*.md"]
+  - path:
+      match: ["src/**/*.html"]
+      ask: "This path belongs to a customer-facing page."
+    content:
+      match: "[Aa]cme"
+      ask: "This file contains marketing copy shown to customers."
 ```
 
-This entry refers to `action-create-component.yaml`. Workflow syntax must remain readable without implementation knowledge.
+Any directory can have `.agents/snippets/`. Snippets are available within that
+directory alongside those inherited from parents; `.agents/snippets/config.yaml`
+can opt out of specific parent snippets. Paths are relative to the directory
+owning that `.agents/snippets/`, with the same scope for targets and evals.
 
-## Step levels
+For generation, the caller supplies a proposed output path and optional source
+text as the input; absent text is the empty string. The path need not exist.
+This lets the same triggers select a new file before content is generated.
+For transformations, the input is an existing file and its text. Triggers
+select inputs once, before actions start.
 
-Each step can define up to three levels:
+## Compilation
 
-| Level | Implementation |
-| --- | --- |
-| 1 | Deterministic actions: templates, filesystem operations, text transformations, and ordinary code. |
-| 2 | Jev / decision models to choose how an action is performed. |
-| 3 | An LLM call to generate or transform content for an action. |
+`agent-snippets compile <id>` gives the calling agent `SNIPPET.md`, a
+snippet-generator skill, and the repository layout. The agent writes triggers,
+ordered actions, and evals into `snippet.yaml`, then loops on
+`agent-snippets validate <id>` and `agent-snippets eval <id>` until they pass.
+The agent generates the YAML; compilation does not introduce another workflow
+language or a separate compiler service.
 
-Not every step needs all three levels. Model configuration and level implementations belong in the step definition. Conditions and model decisions support an action; standalone checks belong to agent-tests.
+Validation checks the package shape, ids, regexes, action definitions, output
+paths, eval expectations, and source hash. When `SNIPPET.md` changes, the YAML
+is stale until recompiled. Invalid or stale snippets cannot run. Validation
+also checks deterministic patterns against the evals and flags risky ones.
+Library snippets arrive compiled; after `add`, the agent adapts them to the
+repository and repeats validation and evals.
 
-The level selection policy is not yet defined. The existence of three levels does not imply automatic fallback. Selection, escalation, and handling of unavailable levels must be specified before implementation.
+## Actions
 
-## Supported work
+Actions replace agent-tests' checks. They run in the order written, with each
+action receiving the preceding action's proposed output. Each action has an
+`id`, a failure `message`, recovery guidance in `fix`, and at least one of
+`fast`, `smart`, or `deep`. Each input starts with its original path and content.
 
-- Create folders and files, choose filenames, and apply naming conventions such as kebab-case, PascalCase, and camelCase.
-- Render text snippet templates, including existing plain-text snippets, default Svelte components, and props.
-- Transform text using deterministic code, decision models, or LLM calls.
-- Create a proposed file structure.
-- Combine and sequence actions into a reusable workflow.
+Levels run cheapest first and escalate only an unsettled action. A successful
+level stops escalation for that action. An execution error fails it rather
+than silently trying a different implementation. Pending outputs from an
+unsettled level are hints, not changes passed to the next action.
 
-## Authoring and validation
+- **`fast`** uses declarative templates, filesystem operations, naming
+  conversions, or regex replacements. A complete deterministic result settles
+  the action. A `maybe` pattern provides hints and escalates, as does an input
+  the deterministic operation cannot handle when a later level exists.
+- **`smart`** uses a decision model such as Jev, Clef, or OpenAI to select among
+  declared output variants. Each variant has an `id`, an `ask` statement, and
+  an `output`. Optional `bounds: [0.3, 0.8]` mean reject below the lower bound,
+  unsure between bounds, and eligible above the upper bound. Exactly one
+  eligible variant with no unsure alternatives settles the action; otherwise
+  it escalates. The classifier selects content; it does not invent content.
+- **`deep`** uses a structured LLM call to generate or transform content from
+  `ask`, the snippet instructions, the input, and earlier hints. It returns a
+  proposed path and content or an explicit unsure result. `reasoning` is
+  optionally `low`, `medium`, or `high`.
 
-1. The user describes the intended action in `nippet.md`.
-2. An AI agent uses the CLI to produce `workflow.yaml`, step files, and tests.
-3. The CLI validates the generated package and runs its tests.
-4. The agent corrects failures until the package satisfies the expected outcomes.
-5. The CLI executes the resulting workflow against supplied inputs.
+If no later level can settle an action, its result is `unsure`. With
+`human-tiebreak: true`, a person reviews the proposal; unresolved output is
+not applied. An action only needs the levels appropriate to its task.
 
-Every nippet must include tests with explicit expected outcomes. These tests verify the action itself: returned values, generated text, filenames, directory structures, and expected failures. They do not turn the nippet into a reusable repository check. The test isolation strategy and treatment of model calls remain to be specified.
+```yaml
+actions:
+  - id: formalize-button
+    message: A formal button label could not be generated.
+    fix: Specify the intended button action in SNIPPET.md.
+    human-tiebreak: true
+    fast:
+      replace:
+        match: '^<button>Go!</button>$'
+        with: <button>Continue</button>
+      maybe: ['\b(hey|awesome|folks)\b']
+    smart:
+      bounds: [0.3, 0.8]
+      variants:
+        - id: save
+          ask: "The entire input is a button whose sole purpose is saving."
+          output:
+            content: <button>Save</button>
+    deep:
+      ask: "Return the complete HTML with a formal button label, preserving its purpose and markup."
+      reasoning: medium
+```
 
-## Failure reporting
+In this example, a `fast.replace` match settles the action unless a `maybe`
+pattern also matches. No replacement match escalates. `output.content`
+replaces the input text; omitted `output.path` preserves its current path.
+For creation, a `fast.output` supplies literal content and an optional path;
+it requires the destination to be absent. Further deterministic operations
+must have declared inputs and outputs; arbitrary shell commands and custom
+code are outside this declarative format.
 
-Failures must help an AI agent recover: identify the step and level, affected input or file, intended effect, actual outcome, and a useful explanation. Distinguish invalid inputs from an inability to execute the action.
+For example, a generation snippet can create a file without a model call:
 
-Report any actions already completed before failure. Machine-readable error formatting and exit codes remain to be specified.
+```yaml
+actions:
+  - id: create-component
+    message: The component could not be created.
+    fix: Choose a component path that does not already exist.
+    fast:
+      output:
+        content: "<script lang=\"ts\"></script>\n\n<div></div>\n"
+```
 
-## Remaining decisions
+`run create-component --input src/lib/Card.svelte` uses the proposed path as
+the output path. Evals use the same `path` and empty `content` to exercise it.
 
-- Exact workflow and step schemas, including inputs, outputs, references, and branching.
-- How levels are selected and whether escalation is allowed.
-- Test file format and how decision-model and LLM behavior is tested.
-- CLI commands, model configuration, file collision behavior, and retry semantics.
+## Execution and reporting
+
+`run <id> [targetDir]` executes a named snippet within its scope. `--changed`
+and `--base <ref>` select changed inputs; `--dry-run` returns proposed changes
+without writing them. `--input <path>` supplies a proposed path for generation,
+using empty content when the file is absent. The library API also accepts
+proposed paths and source text. `targets <id>` previews applicability without
+actions. `list` renders installed snippets as a directory tree; `docs` supplies
+skills that teach agents to author and run them.
+
+Output paths stay inside the target directory. A transformation may replace
+its selected input; creation or renaming into another existing path fails
+without overwriting it. Folder creation follows the output path. Inputs run
+in stable path order, actions run sequentially, and collisions fail explicitly.
+There are no automatic retries of actions that write files.
+
+Each result names the snippet, action, level, input path, output paths, and
+outcome: `pass`, `fail`, `unsure`, or `skip`. Failures include the intended
+effect, actual outcome, and recovery guidance. CLI output, the Vitest plugin,
+and the library expose the same results. A run reports all completed changes
+and the input where it stopped; it does not imply rollback of earlier inputs.
+An unresolved or failed action stops subsequent actions for that input and
+does not publish that input's pending changes.
+
+## Evals
+
+Evals benchmark generated workflows and model changes against approved results.
+They live under `evals` in `snippet.yaml` and use the real triggers and actions
+in an isolated temporary directory. They never modify the user's files.
+`path` and `content` supply invocation inputs. An optional `files` map seeds
+existing fixture paths with their text, allowing output-collision evals.
+Fixture paths stay inside the temporary directory.
+
+```yaml
+evals:
+  - name: English button label
+    path: src/save.html
+    content: <button>Save</button>
+    expect: pass
+    output:
+      path: src/save.html
+      content: <button>Enregistrer</button>
+  - name: French label remains unchanged
+    path: src/save.html
+    content: <button>Enregistrer</button>
+    expect: pass
+    output:
+      path: src/save.html
+      content: <button>Enregistrer</button>
+  - name: Source code is outside scope
+    path: src/save.ts
+    content: "export const save = () => {};"
+    expect: skip
+```
+
+`expect` is `pass`, `fail`, `unsure`, or `skip`. Unlike a test's `fail` verdict,
+a snippet's `fail` means generation or transformation could not complete.
+Every `pass` example declares the expected output path and content; other
+outcomes assert no published output. `eval <id>` reports both outcome and
+output mismatches. Include successful generation, unchanged content, skipped
+inputs, and expected failures such as invalid input. Providers use the
+repository's model configuration, so model upgrades exercise real decisions
+and generation rather than substituting mocks.
+
+## Community library
+
+The planned repository layout matches agent-tests: `core/` for the npm package,
+`docs/` for a static Bref-ui documentation site, `library/` for community
+snippets, and `.github/workflows/` for docs, publishing, and library checks.
+These packages and workflows are not implemented in this specification PR.
+
+A contribution changes one snippet and exactly two files:
+`library/<id>/SNIPPET.md` and `library/<id>/snippet.yaml`. Ids are permanent.
+The first prose line credits the PR author as
+`By [your-handle](https://github.com/your-handle)`; updates preserve the credit.
+The YAML must match the id and source hash and contain `pass`, `fail`, and
+`skip` evals. Contributors include validation and eval output in the PR,
+keeping credentials and run artifacts out of Git.
+
+Library snippets are declarative: no scripts or extra executable files.
+Describe only the intended task and outputs; instructions to read secrets,
+bypass controls, or manipulate the executing agent are prompt injection.
+The agent-tests library review rules carry over: scan both files for hidden
+or bidirectional Unicode, HTML comments, scripts, encoded payloads, and links
+other than the credit. Hidden content closes a PR with `security-flagged`;
+suspected injection requires `security-review` and a maintainer's
+`security-cleared`, revoked on any new commit. Confirmed malicious accounts
+are banned. These are planned enforcement requirements, not existing checks.
+
+`add <id> [targetDir]` copies the two files from
+`feuersteiner/agent-snippets` on `main` into
+`<targetDir>/.agents/snippets/<id>/`, records the source commit, prints the
+adaptation brief, and runs evals. Every snippet merged into `main` is
+available. `update` compares against the recorded commit; removed library
+entries are reported while their local copies are kept. `score.csv` is never
+installed.
+
+`vote <id> [--up | --down]` uses the signed-in GitHub CLI account to toggle or
+set a vote through a PR, following the agent-tests vote flow. Each snippet's
+`score.csv` has one `github_handle` column, one unquoted handle per row, no
+`@` or blank rows, and case-insensitive uniqueness. A vote PR changes only
+one row in one score file, adding or removing only the PR author's own handle.
+Pending vote PRs determine the effective vote; a matching request is a no-op,
+and reversing a pending vote closes its PR. Otherwise the command creates a
+branch in the library repo or the voter's fork and opens a PR without changing
+the local working tree. Scores express interest and never gate availability.
+
+Planned `Library add`, `Library update`, and `Library score` workflows run
+trusted default-branch checks against PR Git data. Require those checks, an
+up-to-date branch, and an approving review on `main`. Valid vote PRs receive
+automated approval and auto-merge once required checks pass; conflicting votes
+require another `vote` run. Publishing and docs deployment follow the same
+package boundaries as agent-tests, adapted to the `agent-snippets` name.

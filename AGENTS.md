@@ -1,4 +1,4 @@
-# nippet agent guide
+# agent-snippets agent guide
 
 - Read README.md before editing.
 - Keep changes scoped to this open-source item.
