@@ -2,6 +2,8 @@
 
 Turn instructions into reusable CLI workflows.
 
+[Join the Discord community](https://discord.gg/E7hsgN7pdW).
+
 Describe how something should be made once. An agent turns that description
 into a snippet that creates folders, names files, renders templates, makes
 decisions, and generates content. Run it again with different inputs, keeping
