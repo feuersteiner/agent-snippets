@@ -14,44 +14,120 @@ belong to each tool; they do not change these boundaries.
 
 **Status:** specification stage; no CLI is implemented or published yet.
 
-## Example
+## Example: add a UI component
 
-A snippet is two files in `.agents/snippets/french-labels/`. `SNIPPET.md`
+A snippet is two files in `.agents/snippets/ui-component/`. `SNIPPET.md`
 describes the task in ordinary prose:
 
 ```md
-Translate button labels in HTML files into French. Preserve the markup and
-leave labels already written in French unchanged.
+Create a Svelte component in the UI package. Use a kebab-case filename and
+place types.ts beside it. Derive the exported props interface from the component
+name: dashboard-navbar.svelte uses DashboardNavbarProps. Leave a WIP comment
+for props, type the component's $props() with that interface, and render WIP
+placeholder text. Create both files together and fail if either already exists.
 ```
 
-The agent writes `snippet.yaml`, containing everything that runs:
+The agent compiles it into `snippet.yaml`, including an eval for the requested
+component. Paths are relative to the repository root:
 
 ```yaml
-id: french-labels
-title: French button labels
-description: Translate HTML button labels into French without changing markup.
-source: sha256:1cb98ca371262f140900996433b5030240527fed8951bdf40c0516b1500febd7
+id: ui-component
+title: Add a UI component
+description: Scaffold a Svelte component and its exported props interface.
+source: sha256:b26a119b9a87e008de93eec4431a6364059034214500526de6c7445bc588d094
 triggers:
   path:
-    match: ["src/**/*.html"]
-  content:
-    match: "<button\\b"
+    match: ["packages/ui/src/lib/**/*.svelte"]
 actions:
-  - id: translate-labels
-    message: Button labels could not be translated.
-    fix: Review the labels and translation instructions in SNIPPET.md.
+  - id: scaffold-component
+    message: The component and its types could not be created.
+    fix: Choose a new component directory in the UI package.
     deep:
-      ask: "Translate button labels into French. Return the complete file, preserving all markup and other text."
-      reasoning: medium
+      ask: |
+        Create the component at the input path and a sibling types.ts.
+        Use a kebab-case filename and derive its PascalCase props interface.
+        Export that interface with /* WIP: insert props here */ inside it.
+        Import it into the Svelte component and type $props() with it.
+        Add a WIP comment for using the props and render WIP placeholder text.
+        Return output.files containing both complete files.
+      reasoning: low
 evals:
-  - name: English label
-    path: src/save.html
-    content: <button>Save</button>
+  - name: Dashboard navbar with separate props
+    path: packages/ui/src/lib/dashboard-navbar/dashboard-navbar.svelte
+    content: ""
     expect: pass
     output:
-      path: src/save.html
-      content: <button>Enregistrer</button>
+      files:
+        packages/ui/src/lib/dashboard-navbar/types.ts: |
+          export interface DashboardNavbarProps {
+            /* WIP: insert props here */
+          }
+        packages/ui/src/lib/dashboard-navbar/dashboard-navbar.svelte: |
+          <script lang="ts">
+            import type { DashboardNavbarProps } from './types';
+
+            // WIP: use the component props.
+            let props: DashboardNavbarProps = $props();
+          </script>
+
+          <nav aria-label="Dashboard">WIP: implement DashboardNavbar</nav>
 ```
+
+The planned invocation creates both files:
+
+```sh
+npx agent-snippets run ui-component --input packages/ui/src/lib/dashboard-navbar/dashboard-navbar.svelte
+```
+
+```text
+packages/ui/src/lib/dashboard-navbar/
+  dashboard-navbar.svelte
+  types.ts
+```
+
+The agent generates the workflow once; the workflow derives filenames and types
+for subsequent components. An existing component or `types.ts` causes a failure
+without replacing either file.
+
+## Another example: add an API route
+
+An `api-route` snippet can scaffold a SvelteKit endpoint, its handler, and a
+response type. Its `SNIPPET.md` describes a GET route whose implementation is
+WIP and whose placeholder returns HTTP 501. For `/api/dashboard`, the agent
+can compile these deterministic actions into `snippet.yaml`:
+
+```yaml
+actions:
+  - id: scaffold-dashboard-route
+    message: The dashboard API route could not be created.
+    fix: Choose an API route directory without existing scaffold files.
+    fast:
+      output:
+        files:
+          apps/web/src/routes/api/dashboard/+server.ts: |
+            import { json } from '@sveltejs/kit';
+            import { getDashboard } from './handler';
+
+            // WIP: return the appropriate status once implemented.
+            export const GET = () => json(getDashboard(), { status: 501 });
+          apps/web/src/routes/api/dashboard/handler.ts: |
+            import type { DashboardResponse } from './types';
+
+            export function getDashboard(): DashboardResponse {
+              // WIP: fetch and return dashboard data.
+              return { message: 'WIP: implement dashboard response' };
+            }
+          apps/web/src/routes/api/dashboard/types.ts: |
+            export interface DashboardResponse {
+              message: string;
+              /* WIP: insert response fields here */
+            }
+```
+
+This is an action excerpt; the complete snippet also has metadata, path
+triggers, a source hash, and evals for all three generated files, collisions,
+and skipped inputs. The files are generated content, not scripts executed
+by the snippet runner.
 
 ## Where it runs
 
@@ -72,20 +148,20 @@ Planned commands; these are not available yet:
 ```sh
 npm install -D agent-snippets
 npx agent-snippets init                         # config and .agents/snippets/
-npx agent-snippets add french-labels             # install a community snippet
-npx agent-snippets add french-labels apps/web    # install for apps/web/ only
-npx agent-snippets compile french-labels         # brief the agent to generate YAML
-npx agent-snippets validate french-labels        # structure and source freshness
+npx agent-snippets add ui-component             # install a community snippet
+npx agent-snippets add ui-component apps/web    # install for apps/web/ only
+npx agent-snippets compile ui-component         # brief the agent to generate YAML
+npx agent-snippets validate ui-component        # structure and source freshness
 npx agent-snippets list                         # installed snippets as a tree
-npx agent-snippets targets french-labels         # preview selected inputs
-npx agent-snippets eval french-labels            # verify labeled examples
-npx agent-snippets run french-labels --dry-run   # preview generated changes
-npx agent-snippets run french-labels             # execute the workflow
-npx agent-snippets run french-labels --changed   # select uncommitted inputs
-npx agent-snippets run french-labels --base main # select inputs changed since main
-# For a generation snippet: run <id> --input src/new-file.html
+npx agent-snippets targets ui-component         # preview selected inputs
+npx agent-snippets eval ui-component            # verify labeled examples
+npx agent-snippets run ui-component --dry-run   # preview generated changes
+npx agent-snippets run ui-component             # execute the workflow
+npx agent-snippets run ui-component --changed   # select uncommitted inputs
+npx agent-snippets run ui-component --base main # select inputs changed since main
+# Generate a component: run ui-component --input packages/ui/src/lib/dashboard-navbar/dashboard-navbar.svelte
 npx agent-snippets docs                         # authoring and execution skills
-npx agent-snippets vote french-labels            # toggle a community vote
+npx agent-snippets vote ui-component            # toggle a community vote
 ```
 
 Choose model providers in `agent-snippets.config.yaml`; keep credentials in
@@ -164,9 +240,11 @@ repository and repeats validation and evals.
 ## Actions
 
 Actions replace agent-tests' checks. They run in the order written, with each
-action receiving the preceding action's proposed output. Each action has an
-`id`, a failure `message`, recovery guidance in `fix`, and at least one of
-`fast`, `smart`, or `deep`. Each input starts with its original path and content.
+action receiving the preceding action's proposed output. Actions share a pending
+file set so a workflow can generate a component and its supporting files.
+Each action has an `id`, a failure `message`, recovery guidance in `fix`, and
+at least one of `fast`, `smart`, or `deep`. Each input starts with its original
+path and content.
 
 Levels run cheapest first and escalate only an unsettled action. A successful
 level stops escalation for that action. An execution error fails it rather
@@ -185,8 +263,8 @@ unsettled level are hints, not changes passed to the next action.
   it escalates. The classifier selects content; it does not invent content.
 - **`deep`** uses a structured LLM call to generate or transform content from
   `ask`, the snippet instructions, the input, and earlier hints. It returns a
-  proposed path and content or an explicit unsure result. `reasoning` is
-  optionally `low`, `medium`, or `high`.
+  proposed path and content, an `output.files` map, or an explicit unsure result.
+  `reasoning` is optionally `low`, `medium`, or `high`.
 
 If no later level can settle an action, its result is `unsure`. With
 `human-tiebreak: true`, a person reviews the proposal; unresolved output is
@@ -218,25 +296,17 @@ actions:
 In this example, a `fast.replace` match settles the action unless a `maybe`
 pattern also matches. No replacement match escalates. `output.content`
 replaces the input text; omitted `output.path` preserves its current path.
-For creation, a `fast.output` supplies literal content and an optional path;
-it requires the destination to be absent. Further deterministic operations
-must have declared inputs and outputs; arbitrary shell commands and custom
-code are outside this declarative format.
+For creation, a `fast.output` supplies literal content and an optional path,
+or a `files` map of paths to content; it requires every destination to be
+absent. Further deterministic operations must have declared inputs and outputs;
+arbitrary shell commands and custom code are outside this declarative format.
 
-For example, a generation snippet can create a file without a model call:
-
-```yaml
-actions:
-  - id: create-component
-    message: The component could not be created.
-    fix: Choose a component path that does not already exist.
-    fast:
-      output:
-        content: "<script lang=\"ts\"></script>\n\n<div></div>\n"
-```
-
-`run create-component --input src/lib/Card.svelte` uses the proposed path as
-the output path. Evals use the same `path` and empty `content` to exercise it.
+`output.files` maps target-relative paths to complete file contents. It is an
+alternative to `output.path` and `output.content`, used by deterministic actions,
+model-generated proposals, and eval expectations alike. This form creates new
+files, so every destination must be absent, including the primary input path.
+The primary input's path and content remain available to subsequent actions; sibling outputs
+accumulate in the pending file set.
 
 ## Execution and reporting
 
@@ -252,7 +322,8 @@ Output paths stay inside the target directory. A transformation may replace
 its selected input; creation or renaming into another existing path fails
 without overwriting it. Folder creation follows the output path. Inputs run
 in stable path order, actions run sequentially, and collisions fail explicitly.
-There are no automatic retries of actions that write files.
+Check every proposed output for collisions before writing any files for that
+input. There are no automatic retries of actions that write files.
 
 Each result names the snippet, action, level, input path, output paths, and
 outcome: `pass`, `fail`, `unsure`, or `skip`. Failures include the intended
@@ -271,32 +342,28 @@ in an isolated temporary directory. They never modify the user's files.
 existing fixture paths with their text, allowing output-collision evals.
 Fixture paths stay inside the temporary directory.
 
+The successful UI example above asserts both generated files. Additional
+examples verify collisions and scope:
+
 ```yaml
 evals:
-  - name: English button label
-    path: src/save.html
-    content: <button>Save</button>
-    expect: pass
-    output:
-      path: src/save.html
-      content: <button>Enregistrer</button>
-  - name: French label remains unchanged
-    path: src/save.html
-    content: <button>Enregistrer</button>
-    expect: pass
-    output:
-      path: src/save.html
-      content: <button>Enregistrer</button>
-  - name: Source code is outside scope
-    path: src/save.ts
-    content: "export const save = () => {};"
+  - name: Existing types must not be overwritten
+    path: packages/ui/src/lib/dashboard-navbar/dashboard-navbar.svelte
+    content: ""
+    files:
+      packages/ui/src/lib/dashboard-navbar/types.ts: "export interface ExistingProps {}\n"
+    expect: fail
+  - name: API files are outside the UI snippet scope
+    path: apps/web/src/routes/api/dashboard/+server.ts
+    content: ""
     expect: skip
 ```
 
 `expect` is `pass`, `fail`, `unsure`, or `skip`. Unlike a test's `fail` verdict,
 a snippet's `fail` means generation or transformation could not complete.
-Every `pass` example declares the expected output path and content; other
-outcomes assert no published output. `eval <id>` reports both outcome and
+Every `pass` example declares the expected output path and content, or the
+complete `output.files` map for multiple files. Other outcomes assert no
+published output and unchanged fixtures. `eval <id>` reports both outcome and
 output mismatches. Include successful generation, unchanged content, skipped
 inputs, and expected failures such as invalid input. Providers use the
 repository's model configuration, so model upgrades exercise real decisions
@@ -316,8 +383,9 @@ Library snippets are declarative: no scripts or extra executable files.
 Describe only the intended task and outputs; instructions to read secrets,
 bypass controls, or manipulate the executing agent are prompt injection.
 The [agent-tests library review rules](https://github.com/feuersteiner/agent-tests/blob/964076aed883c352036cc0677b5e94f26abc2304/library/AGENTS.md) carry over: scan both files for hidden
-or bidirectional Unicode, HTML comments, scripts, encoded payloads, and links
-other than the credit. Hidden content closes a PR with `security-flagged`;
+or bidirectional Unicode, HTML comments, scripts outside declared generated
+content, encoded payloads, and links other than the credit. Hidden content
+closes a PR with `security-flagged`;
 suspected injection requires `security-review` and a maintainer's
 `security-cleared`, revoked on any new commit. Confirmed malicious accounts
 are banned. These are planned enforcement requirements, not existing checks.
@@ -352,8 +420,6 @@ package boundaries as agent-tests, adapted to the `agent-snippets` name.
 The planned repository layout matches agent-tests: `core/` for the npm package,
 `docs/` for a static Bref-ui documentation site, `library/` for community
 snippets, and `.github/workflows/` for docs, publishing, and library checks.
-These packages and workflows are not implemented in this specification PR.
-
 These packages and workflows are planned; none is implemented yet.
 
 ## Verification
