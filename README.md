@@ -1,83 +1,73 @@
 # agent-snippets
 
-Turn instructions into reusable workflows that generate content.
+Turn instructions into reusable CLI workflows.
 
-An agent compiles `SNIPPET.md` into one `snippet.yaml`: triggers select inputs,
-actions generate or transform content, and evals verify the results. The
-framework mirrors [agent-tests](https://github.com/feuersteiner/agent-tests/blob/964076aed883c352036cc0677b5e94f26abc2304/README.md).
+Describe how something should be made once. An agent turns that description
+into a snippet that creates folders, names files, renders templates, makes
+decisions, and generates content. Run it again with different inputs, keeping
+the conventions and workflow that made the first result useful.
 
-Agent-snippets owns actions: generating content, rendering templates, creating
-files and folders, applying naming conventions, and sequencing transformations.
-Agent-tests owns checks: inspecting targets and reporting findings without
-modifying them. Neither CLI depends on the other. Input validation and evals
-belong to each tool; they do not change these boundaries.
+A snippet can scaffold a UI component, set up an API route, organize a folder,
+or turn a rough brief into content. It combines the repeatability of a text
+snippet with an agent's ability to interpret a task.
 
 **Status:** specification stage; no CLI is implemented or published yet.
 
 ## Example: add a UI component
 
-A snippet is two files in `.agents/snippets/ui-component/`. `SNIPPET.md`
-describes the task in ordinary prose:
+Describe the convention in `.agents/snippets/ui-component/SNIPPET.md`:
 
 ```md
-Create a Svelte component in the UI package. Use a kebab-case filename and
-place types.ts beside it. Derive the exported props interface from the component
-name: dashboard-navbar.svelte uses DashboardNavbarProps. Leave a WIP comment
-for props, type the component's $props() with that interface, and render WIP
-placeholder text. Create both files together and fail if either already exists.
+Add a component to the UI package from a supplied name. Use a kebab-case
+folder and .svelte filename, with types.ts beside the component. Export a
+PascalCase props interface: dashboard-navbar becomes DashboardNavbarProps.
+Leave /* WIP: insert props here */ inside the interface. Import that type
+into the component, use it for $props(), and add WIP comments and placeholder
+text. Create both files together; do not overwrite existing files.
 ```
 
-The agent compiles it into `snippet.yaml`, including an eval for the requested
-component. Paths are relative to the repository root:
+The agent compiles this into `snippet.yaml`. The scaffold is predictable,
+so reusable templates can produce it without a model call on every run:
 
 ```yaml
 id: ui-component
 title: Add a UI component
-description: Scaffold a Svelte component and its exported props interface.
-source: sha256:b26a119b9a87e008de93eec4431a6364059034214500526de6c7445bc588d094
-triggers:
-  path:
-    match: ["packages/ui/src/lib/**/*.svelte"]
+description: Create a Svelte component and its exported props interface.
+source: sha256:46343a3392c9ec57e89b2d45a62ffeb562674cab17cedf012cebc946a2d867e1
+inputs:
+  name:
+    type: string
+    required: true
+  directory:
+    type: path
+    default: packages/ui/src/lib
 actions:
   - id: scaffold-component
-    message: The component and its types could not be created.
-    fix: Choose a new component directory in the UI package.
-    deep:
-      ask: |
-        Create the component at the input path and a sibling types.ts.
-        Use a kebab-case filename and derive its PascalCase props interface.
-        Export that interface with /* WIP: insert props here */ inside it.
-        Import it into the Svelte component and type $props() with it.
-        Add a WIP comment for using the props and render WIP placeholder text.
-        Return output.files containing both complete files.
-      reasoning: low
-evals:
-  - name: Dashboard navbar with separate props
-    path: packages/ui/src/lib/dashboard-navbar/dashboard-navbar.svelte
-    content: ""
-    expect: pass
-    output:
-      files:
-        packages/ui/src/lib/dashboard-navbar/types.ts: |
-          export interface DashboardNavbarProps {
-            /* WIP: insert props here */
-          }
-        packages/ui/src/lib/dashboard-navbar/dashboard-navbar.svelte: |
-          <script lang="ts">
-            import type { DashboardNavbarProps } from './types';
+    fast:
+      output:
+        files:
+          "{{ inputs.directory }}/{{ inputs.name | kebabCase }}/types.ts": |
+            export interface {{ inputs.name | pascalCase }}Props {
+              /* WIP: insert props here */
+            }
+          "{{ inputs.directory }}/{{ inputs.name | kebabCase }}/{{ inputs.name | kebabCase }}.svelte": |
+            <script lang="ts">
+              import type { {{ inputs.name | pascalCase }}Props } from './types';
 
-            // WIP: use the component props.
-            let props: DashboardNavbarProps = $props();
-          </script>
+              // WIP: use the component props.
+              let props: {{ inputs.name | pascalCase }}Props = $props();
+            </script>
 
-          <nav aria-label="Dashboard">WIP: implement DashboardNavbar</nav>
+            <nav>WIP: implement {{ inputs.name | pascalCase }}</nav>
 ```
 
-The planned invocation creates both files:
+The planned command:
 
 ```sh
-npx agent-snippets run ui-component --input packages/ui/src/lib/dashboard-navbar/dashboard-navbar.svelte
+npx agent-snippets run ui-component --name "Dashboard Navbar"
 ```
+
+produces:
 
 ```text
 packages/ui/src/lib/dashboard-navbar/
@@ -85,61 +75,169 @@ packages/ui/src/lib/dashboard-navbar/
   types.ts
 ```
 
-The agent generates the workflow once; the workflow derives filenames and types
-for subsequent components. An existing component or `types.ts` causes a failure
-without replacing either file.
+`types.ts`:
 
-## Another example: add an API route
+```ts
+export interface DashboardNavbarProps {
+  /* WIP: insert props here */
+}
+```
 
-An `api-route` snippet can scaffold a SvelteKit endpoint, its handler, and a
-response type. Its `SNIPPET.md` describes a GET route whose implementation is
-WIP and whose placeholder returns HTTP 501. For `/api/dashboard`, the agent
-can compile these deterministic actions into `snippet.yaml`:
+`dashboard-navbar.svelte`:
+
+```svelte
+<script lang="ts">
+  import type { DashboardNavbarProps } from './types';
+
+  // WIP: use the component props.
+  let props: DashboardNavbarProps = $props();
+</script>
+
+<nav>WIP: implement DashboardNavbar</nav>
+```
+
+Run it with another name to create another component using the same convention.
+A snippet that also designs the component from a brief could follow this
+scaffold with a generation step.
+
+## Another example: set up an API route
+
+An `api-route` snippet takes a route name and scaffolds a SvelteKit endpoint,
+a handler, and a response type. For `--name dashboard`, it creates:
+
+```text
+apps/web/src/routes/api/dashboard/
+  +server.ts
+  handler.ts
+  types.ts
+```
+
+Its compiled action can use templates too. This excerpt assumes a required
+string input named `name`:
 
 ```yaml
 actions:
-  - id: scaffold-dashboard-route
-    message: The dashboard API route could not be created.
-    fix: Choose an API route directory without existing scaffold files.
+  - id: scaffold-route
     fast:
       output:
         files:
-          apps/web/src/routes/api/dashboard/+server.ts: |
+          "apps/web/src/routes/api/{{ inputs.name | kebabCase }}/+server.ts": |
             import { json } from '@sveltejs/kit';
-            import { getDashboard } from './handler';
+            import { handleGet } from './handler';
 
             // WIP: return the appropriate status once implemented.
-            export const GET = () => json(getDashboard(), { status: 501 });
-          apps/web/src/routes/api/dashboard/handler.ts: |
-            import type { DashboardResponse } from './types';
+            export const GET = () => json(handleGet(), { status: 501 });
+          "apps/web/src/routes/api/{{ inputs.name | kebabCase }}/handler.ts": |
+            import type { {{ inputs.name | pascalCase }}Response } from './types';
 
-            export function getDashboard(): DashboardResponse {
-              // WIP: fetch and return dashboard data.
-              return { message: 'WIP: implement dashboard response' };
+            export function handleGet(): {{ inputs.name | pascalCase }}Response {
+              // WIP: fetch and return the route's data.
+              return { message: 'WIP: implement {{ inputs.name | pascalCase }}' };
             }
-          apps/web/src/routes/api/dashboard/types.ts: |
-            export interface DashboardResponse {
+          "apps/web/src/routes/api/{{ inputs.name | kebabCase }}/types.ts": |
+            export interface {{ inputs.name | pascalCase }}Response {
               message: string;
               /* WIP: insert response fields here */
             }
 ```
 
-This is an action excerpt; the complete snippet also has metadata, path
-triggers, a source hash, and evals for all three generated files, collisions,
-and skipped inputs. The files are generated content, not scripts executed
-by the snippet runner.
+The placeholder returns HTTP 501 until implemented. A richer workflow could
+choose an authentication pattern, generate a handler from a brief, and then
+write the related files in order.
 
-## Where it runs
+## Authoring and reuse
 
-- During an agent session, for a named generation or transformation task.
-- On selected files or a repository area, including uncommitted changes or a
-  change relative to a base branch.
-- In CI, when the workflow explicitly requests generated content.
-- Through a Vitest plugin, comparing generated outputs with expectations.
-- As a library from the `agent-snippets` npm package.
+1. Describe the task, conventions, inputs, and intended outputs in `SNIPPET.md`.
+2. An agent generates `snippet.yaml`, including reusable actions and examples.
+3. Validate the workflow and try its examples in an isolated directory.
+4. Inspect the proposed files with `run --dry-run`, then run with real inputs.
+5. Refine the instructions and recompile as the workflow improves.
 
-Execution always names a snippet. `init` creates configuration and
-`.agents/snippets/`; it does not install an automatic generation hook.
+`compile <id>` gives the calling agent the instructions, a snippet-authoring
+skill, and the project layout. The agent writes and corrects the YAML using
+`validate` and `eval`. The CLI provides the tools; the agent translates the
+task into the workflow.
+
+`SNIPPET.md` remains the human-readable source. `snippet.yaml` contains the
+executable workflow and can also be edited by hand. Its `source` records
+`sha256:<SHA-256 of the exact SNIPPET.md bytes>`. Validation detects changed
+instructions and requires recompilation before execution.
+
+## Inputs and templates
+
+Inputs describe what varies between runs: a component name, destination,
+source text, or a generation brief. Each input declares its type, whether it
+is required, and an optional default. CLI flags use these input names; the
+library API accepts the same values as an object.
+
+Templates interpolate `{{ inputs.name }}`. The `kebabCase` and `pascalCase`
+filters turn names such as `Dashboard Navbar` into `dashboard-navbar` and
+`DashboardNavbar`. Templates work in output paths and file contents. Missing
+inputs, invalid paths, and names that cannot produce valid filenames or
+identifiers are validation errors.
+
+Paths are relative to the directory where the snippet is installed, or an
+explicit target directory supplied when running it. A new file needs no
+existing input file to activate generation.
+
+## Workflow actions
+
+Actions run in the declared order and share inputs and a pending set of files.
+Use the execution method suited to each action:
+
+- **`fast`** renders templates and performs deterministic file, naming, or
+  text operations. Use it when the result follows directly from the inputs.
+- **`smart`** uses a decision model to choose a declared variant or workflow
+  branch, such as which authentication scaffold fits a route. Each choice
+  describes its applicability and the action or output it selects.
+- **`deep`** calls an LLM to generate or transform content from instructions
+  and context, such as implementing a component from a design brief. It
+  returns proposed files. Optional `reasoning` is `low`, `medium`, or `high`.
+
+These are ways to perform work. A template action finishes after rendering;
+a model decision selects the next work; a generation action produces content.
+The workflow explicitly defines any branching or fallback. An execution error
+stops the run rather than silently selecting another implementation.
+
+`output.files` maps destination paths to complete file contents. For `fast`,
+paths and content can be templates; generation steps return concrete paths
+and content. Later actions can use the pending files as context and refine
+them before the workflow writes its final result.
+
+Creation fails if any destination already exists. Transformations must
+explicitly identify the existing files they intend to change. Output paths
+stay within the target directory, and collision checks happen before writing.
+`--dry-run` shows the proposed file tree and changes without applying them.
+
+Failures identify the action, affected paths, intended effect, actual outcome,
+and recovery guidance. Any files already written are reported so a retry can
+account for them. Pending content from an unfinished action is not published.
+
+## Verify a snippet
+
+Examples demonstrate that the workflow produces the intended artifacts.
+They live under `evals` in `snippet.yaml`; `eval <id>` runs them in temporary
+directories and compares the generated files with the expected results.
+
+For example, the UI snippet can include this collision case:
+
+```yaml
+evals:
+  - name: Preserve existing component types
+    inputs:
+      name: Dashboard Navbar
+    files:
+      packages/ui/src/lib/dashboard-navbar/types.ts: "export interface ExistingProps {}\n"
+    expect:
+      error: output-conflict
+```
+
+Successful examples supply `expect.files` with concrete output paths and
+contents, including the component and its props interface. Failure examples
+supply `expect.error` and assert that existing files remain unchanged. The
+agent validates both the ordinary task and relevant edge cases before reuse.
+Model-backed actions use the configured provider during evals so their
+outputs can be reviewed when instructions or models change.
 
 ## Get started (WIP)
 
@@ -147,27 +245,25 @@ Planned commands; these are not available yet:
 
 ```sh
 npm install -D agent-snippets
-npx agent-snippets init                         # config and .agents/snippets/
-npx agent-snippets add ui-component             # install a community snippet
-npx agent-snippets add ui-component apps/web    # install for apps/web/ only
-npx agent-snippets compile ui-component         # brief the agent to generate YAML
-npx agent-snippets validate ui-component        # structure and source freshness
-npx agent-snippets list                         # installed snippets as a tree
-npx agent-snippets targets ui-component         # preview selected inputs
-npx agent-snippets eval ui-component            # verify labeled examples
-npx agent-snippets run ui-component --dry-run   # preview generated changes
-npx agent-snippets run ui-component             # execute the workflow
-npx agent-snippets run ui-component --changed   # select uncommitted inputs
-npx agent-snippets run ui-component --base main # select inputs changed since main
-# Generate a component: run ui-component --input packages/ui/src/lib/dashboard-navbar/dashboard-navbar.svelte
-npx agent-snippets docs                         # authoring and execution skills
-npx agent-snippets vote ui-component            # toggle a community vote
+npx agent-snippets init                         # configuration and local snippets
+npx agent-snippets add ui-component             # install a reusable workflow
+npx agent-snippets compile ui-component         # agent generates snippet.yaml
+npx agent-snippets validate ui-component        # structure, inputs, and source hash
+npx agent-snippets eval ui-component            # try the workflow's examples
+npx agent-snippets run ui-component --name "Dashboard Navbar" --dry-run
+npx agent-snippets run ui-component --name "Dashboard Navbar"
+npx agent-snippets list                         # available snippets
+npx agent-snippets docs                         # authoring and execution guidance
 ```
 
-Choose model providers in `agent-snippets.config.yaml`; keep credentials in
-`.env`. Agent-tests remains an independent tool for checking repositories.
+The CLI runs named workflows. Agents can invoke it while working; scripts or
+other tools can invoke the same workflows through the CLI or package API.
+Choose providers in `agent-snippets.config.yaml` for workflows that need
+models, and keep credentials in `.env`.
 
-## Package
+## Sharing snippets
+
+A reusable package has two files:
 
 ```text
 .agents/snippets/<id>/
@@ -175,258 +271,34 @@ Choose model providers in `agent-snippets.config.yaml`; keep credentials in
   snippet.yaml
 ```
 
-`SNIPPET.md` describes the task, examples, exceptions, inputs, and intended
-outputs in ordinary prose. The agent generates `snippet.yaml`, which holds
-`id`, `title`, `description`, `source`, `triggers`, `actions`, and `evals`.
-Ids are lowercase kebab-case and match their directory. `source` is
-`sha256:<SHA-256 of the exact SNIPPET.md bytes>`.
+Any project directory can have its own `.agents/snippets/`. Snippets are
+available there and in child directories; local configuration can disable
+specific inherited snippets. `add <id> [targetDir]` installs a community
+snippet in the chosen directory, then gives the agent an adaptation brief.
+`update` compares against the recorded library commit and preserves a local
+copy if its upstream entry disappears.
 
-One YAML file contains the entire executable workflow, including inline
-instructions, templates, and labeled examples. Separate `workflow.yaml`,
-`action-*.yaml`, scripts, and external test files are not part of this format.
-YAML remains editable by hand.
+Community snippets live in `library/<id>/` in `feuersteiner/agent-snippets`.
+Contributions include the instructions, compiled workflow, credited author,
+and examples showing the generated results and expected errors. Review checks
+that the workflow does its stated task and contains no hidden or unrelated
+instructions. Generated code is content; the runner does not execute it as
+part of rendering a template.
 
-## Triggers and scope
+Every snippet merged into `main` is available to install. Planned
+`vote <id> [--up | --down]` records interest through a GitHub PR changing only
+the signed-in user's own row in the snippet's `score.csv`. Votes do not gate
+availability.
 
-Triggers use the same semantics as agent-tests: each trigger reads an input's
-`path`, its `content`, or both. Every filter named in a trigger must pass, in
-the order written. A list of triggers holds alternatives and stops at the
-first passing trigger. Rejected inputs are skipped without running actions.
+The planned repository layout is `core/` for the npm package, `docs/` for its
+documentation, and `library/` for shared workflows. Agent-tests remains an
+independent project for repository checks.
 
-- `path.match`: globs on the input path; a list matches any listed glob.
-- `path.ask`: a decision model judging the path.
-- `content.match`: a regex on the input text.
-- `content.ask`: a decision model judging the input text.
+## Verify this README
 
-```yaml
-triggers:
-  - path:
-      match: ["content/**/*.md"]
-  - path:
-      match: ["src/**/*.html"]
-      ask: "This path belongs to a customer-facing page."
-    content:
-      match: "[Aa]cme"
-      ask: "This file contains marketing copy shown to customers."
-```
-
-Any directory can have `.agents/snippets/`. Snippets are available within that
-directory alongside those inherited from parents; `.agents/snippets/config.yaml`
-can opt out of specific parent snippets. Paths are relative to the directory
-owning that `.agents/snippets/`, with the same scope for targets and evals.
-
-For generation, the caller supplies a proposed output path and optional source
-text as the input; absent text is the empty string. The path need not exist.
-This lets the same triggers select a new file before content is generated.
-For transformations, the input is an existing file and its text. Triggers
-select inputs once, before actions start.
-
-## Compilation
-
-`agent-snippets compile <id>` gives the calling agent `SNIPPET.md`, a
-snippet-generator skill, and the repository layout. The agent writes triggers,
-ordered actions, and evals into `snippet.yaml`, then loops on
-`agent-snippets validate <id>` and `agent-snippets eval <id>` until they pass.
-The agent generates the YAML; compilation does not introduce another workflow
-language or a separate compiler service.
-
-Validation checks the package shape, ids, regexes, action definitions, output
-paths, eval expectations, and source hash. When `SNIPPET.md` changes, the YAML
-is stale until recompiled. Invalid or stale snippets cannot run. Validation
-also checks deterministic patterns against the evals and flags risky ones.
-Library snippets arrive compiled; after `add`, the agent adapts them to the
-repository and repeats validation and evals.
-
-## Actions
-
-Actions replace agent-tests' checks. They run in the order written, with each
-action receiving the preceding action's proposed output. Actions share a pending
-file set so a workflow can generate a component and its supporting files.
-Each action has an `id`, a failure `message`, recovery guidance in `fix`, and
-at least one of `fast`, `smart`, or `deep`. Each input starts with its original
-path and content.
-
-Levels run cheapest first and escalate only an unsettled action. A successful
-level stops escalation for that action. An execution error fails it rather
-than silently trying a different implementation. Pending outputs from an
-unsettled level are hints, not changes passed to the next action.
-
-- **`fast`** uses declarative templates, filesystem operations, naming
-  conversions, or regex replacements. A complete deterministic result settles
-  the action. A `maybe` pattern provides hints and escalates, as does an input
-  the deterministic operation cannot handle when a later level exists.
-- **`smart`** uses a decision model such as Jev, Clef, or OpenAI to select among
-  declared output variants. Each variant has an `id`, an `ask` statement, and
-  an `output`. Optional `bounds: [0.3, 0.8]` mean reject below the lower bound,
-  unsure between bounds, and eligible above the upper bound. Exactly one
-  eligible variant with no unsure alternatives settles the action; otherwise
-  it escalates. The classifier selects content; it does not invent content.
-- **`deep`** uses a structured LLM call to generate or transform content from
-  `ask`, the snippet instructions, the input, and earlier hints. It returns a
-  proposed path and content, an `output.files` map, or an explicit unsure result.
-  `reasoning` is optionally `low`, `medium`, or `high`.
-
-If no later level can settle an action, its result is `unsure`. With
-`human-tiebreak: true`, a person reviews the proposal; unresolved output is
-not applied. An action only needs the levels appropriate to its task.
-
-```yaml
-actions:
-  - id: formalize-button
-    message: A formal button label could not be generated.
-    fix: Specify the intended button action in SNIPPET.md.
-    human-tiebreak: true
-    fast:
-      replace:
-        match: '^<button>Go!</button>$'
-        with: <button>Continue</button>
-      maybe: ['\b(hey|awesome|folks)\b']
-    smart:
-      bounds: [0.3, 0.8]
-      variants:
-        - id: save
-          ask: "The entire input is a button whose sole purpose is saving."
-          output:
-            content: <button>Save</button>
-    deep:
-      ask: "Return the complete HTML with a formal button label, preserving its purpose and markup."
-      reasoning: medium
-```
-
-In this example, a `fast.replace` match settles the action unless a `maybe`
-pattern also matches. No replacement match escalates. `output.content`
-replaces the input text; omitted `output.path` preserves its current path.
-For creation, a `fast.output` supplies literal content and an optional path,
-or a `files` map of paths to content; it requires every destination to be
-absent. Further deterministic operations must have declared inputs and outputs;
-arbitrary shell commands and custom code are outside this declarative format.
-
-`output.files` maps target-relative paths to complete file contents. It is an
-alternative to `output.path` and `output.content`, used by deterministic actions,
-model-generated proposals, and eval expectations alike. This form creates new
-files, so every destination must be absent, including the primary input path.
-The primary input's path and content remain available to subsequent actions; sibling outputs
-accumulate in the pending file set.
-
-## Execution and reporting
-
-`run <id> [targetDir]` executes a named snippet within its scope. `--changed`
-and `--base <ref>` select changed inputs; `--dry-run` returns proposed changes
-without writing them. `--input <path>` supplies a proposed path for generation,
-using empty content when the file is absent. The library API also accepts
-proposed paths and source text. `targets <id>` previews applicability without
-actions. `list` renders installed snippets as a directory tree; `docs` supplies
-skills that teach agents to author and run them.
-
-Output paths stay inside the target directory. A transformation may replace
-its selected input; creation or renaming into another existing path fails
-without overwriting it. Folder creation follows the output path. Inputs run
-in stable path order, actions run sequentially, and collisions fail explicitly.
-Check every proposed output for collisions before writing any files for that
-input. There are no automatic retries of actions that write files.
-
-Each result names the snippet, action, level, input path, output paths, and
-outcome: `pass`, `fail`, `unsure`, or `skip`. Failures include the intended
-effect, actual outcome, and recovery guidance. CLI output, the Vitest plugin,
-and the library expose the same results. A run reports all completed changes
-and the input where it stopped; it does not imply rollback of earlier inputs.
-An unresolved or failed action stops subsequent actions for that input and
-does not publish that input's pending changes.
-
-## Evals
-
-Evals benchmark generated workflows and model changes against approved results.
-They live under `evals` in `snippet.yaml` and use the real triggers and actions
-in an isolated temporary directory. They never modify the user's files.
-`path` and `content` supply invocation inputs. An optional `files` map seeds
-existing fixture paths with their text, allowing output-collision evals.
-Fixture paths stay inside the temporary directory.
-
-The successful UI example above asserts both generated files. Additional
-examples verify collisions and scope:
-
-```yaml
-evals:
-  - name: Existing types must not be overwritten
-    path: packages/ui/src/lib/dashboard-navbar/dashboard-navbar.svelte
-    content: ""
-    files:
-      packages/ui/src/lib/dashboard-navbar/types.ts: "export interface ExistingProps {}\n"
-    expect: fail
-  - name: API files are outside the UI snippet scope
-    path: apps/web/src/routes/api/dashboard/+server.ts
-    content: ""
-    expect: skip
-```
-
-`expect` is `pass`, `fail`, `unsure`, or `skip`. Unlike a test's `fail` verdict,
-a snippet's `fail` means generation or transformation could not complete.
-Every `pass` example declares the expected output path and content, or the
-complete `output.files` map for multiple files. Other outcomes assert no
-published output and unchanged fixtures. `eval <id>` reports both outcome and
-output mismatches. Include successful generation, unchanged content, skipped
-inputs, and expected failures such as invalid input. Providers use the
-repository's model configuration, so model upgrades exercise real decisions
-and generation rather than substituting mocks.
-
-## Community library
-
-A contribution changes one snippet and exactly two files:
-`library/<id>/SNIPPET.md` and `library/<id>/snippet.yaml`. Ids are permanent.
-The first prose line credits the PR author as
-`By [your-handle](https://github.com/your-handle)`; updates preserve the credit.
-The YAML must match the id and source hash and contain `pass`, `fail`, and
-`skip` evals. Contributors include validation and eval output in the PR,
-keeping credentials and run artifacts out of Git.
-
-Library snippets are declarative: no scripts or extra executable files.
-Describe only the intended task and outputs; instructions to read secrets,
-bypass controls, or manipulate the executing agent are prompt injection.
-The [agent-tests library review rules](https://github.com/feuersteiner/agent-tests/blob/964076aed883c352036cc0677b5e94f26abc2304/library/AGENTS.md) carry over: scan both files for hidden
-or bidirectional Unicode, HTML comments, scripts outside declared generated
-content, encoded payloads, and links other than the credit. Hidden content
-closes a PR with `security-flagged`;
-suspected injection requires `security-review` and a maintainer's
-`security-cleared`, revoked on any new commit. Confirmed malicious accounts
-are banned. These are planned enforcement requirements, not existing checks.
-
-`add <id> [targetDir]` copies the two files from
-`feuersteiner/agent-snippets` on `main` into
-`<targetDir>/.agents/snippets/<id>/`, records the source commit, prints the
-adaptation brief, and runs evals. Every snippet merged into `main` is
-available. `update` compares against the recorded commit; removed library
-entries are reported while their local copies are kept. `score.csv` is never
-installed.
-
-`vote <id> [--up | --down]` uses the signed-in GitHub CLI account to toggle or
-set a vote through a PR, following the agent-tests vote flow. Each snippet's
-`score.csv` has one `github_handle` column, one unquoted handle per row, no
-`@` or blank rows, and case-insensitive uniqueness. A vote PR changes only
-one row in one score file, adding or removing only the PR author's own handle.
-Pending vote PRs determine the effective vote; a matching request is a no-op,
-and reversing a pending vote closes its PR. Otherwise the command creates a
-branch in the library repo or the voter's fork and opens a PR without changing
-the local working tree. Scores express interest and never gate availability.
-
-Planned `Library add`, `Library update`, and `Library score` workflows run
-trusted default-branch checks against PR Git data. Require those checks, an
-up-to-date branch, and an approving review on `main`. Valid vote PRs receive
-automated approval and auto-merge once required checks pass; conflicting votes
-require another `vote` run. Publishing and docs deployment follow the same
-package boundaries as agent-tests, adapted to the `agent-snippets` name.
-
-## Repository structure
-
-The planned repository layout matches agent-tests: `core/` for the npm package,
-`docs/` for a static Bref-ui documentation site, `library/` for community
-snippets, and `.github/workflows/` for docs, publishing, and library checks.
-These packages and workflows are planned; none is implemented yet.
-
-## Verification
-
-No installation or build is required. Run `git diff --check` and review the
-YAML examples against the definitions above. Runtime validation and eval
-commands become verification commands once the CLI exists.
+No installation or build is required. Run `git diff --check`, parse the YAML
+examples, and inspect the generated component and route code. The CLI commands
+above become runtime verification commands once the CLI exists.
 
 ## License
 
